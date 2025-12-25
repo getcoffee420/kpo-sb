@@ -1,0 +1,38 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: payments-service
+  datasource:
+    url: jdbc:postgresql://payments-db:5432/payments
+    username: payments
+    password: payments
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+  kafka:
+    bootstrap-servers: kafka:9092
+    consumer:
+      group-id: payments-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
+    listener:
+      ack-mode: manual
+    producer:
+      properties:
+        enable.idempotence: true
+
+app:
+  outbox:
+    poll-interval-ms: 500
+    batch-size: 50
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

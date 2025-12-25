@@ -1,52 +1,54 @@
-# Архитектура и взаимодействие сервисов
+# Gozon
 
-## Обзор
-Система состоит из трёх Spring Boot микросервисов, объединённых через HTTP и конфигурацию Docker Compose:
+Асинхронное межсервисное взаимодействие с использованием Kafka  
+с гарантией **at-least-once доставки сообщений** и  
+**effectively exactly-once бизнес-семантикой** при списании денег за заказ.
 
-- **Gateway** (`8080`) — внешняя точка входа. Принимает пользовательские запросы, валидирует входные данные, вызывает остальные сервисы.
-- **Storage** (`8081`) — отвечает за долговременное хранение файлов работ. Предоставляет API загрузки и скачивания бинарных данных.
-- **Analysis** (`8082`) — хранит метаданные отправок и выполняет упрощённую проверку на плагиат, сравнивая хэши загруженных работ.
+## Сервисы
 
-Сервисы разворачиваются общей композицией и используют мостовую сеть `appnet`; переменные окружения `SERVICES_STORAGEURL` и `SERVICES_ANALYSISURL` передаются в Gateway для связи с соседями.
+- **gateway** (8080) — Spring Cloud Gateway, маршрутизация запросов.
+- **orders-service** (8081) — создание и просмотр заказов, **Transactional Outbox**.
+- **payments-service** (8082) — управление счетами и балансом,  
+  **Transactional Inbox + Outbox**, идемпотентная обработка платежей.
 
-## Пользовательские сценарии и поток данных
+## Быстрый старт
 
-### 1. Создание новой работы
-1. Пользователь отправляет multipart-запрос `POST /works` в Gateway с файлом и метаданными (`student`, `task`).
-2. Gateway вычисляет хэш содержимого файла и вызывает Storage `POST /files` для загрузки бинарных 
-   данных. Storage сохраняет файл в каталог `${storage.dir}` и возвращает `fileId`.
-3. Gateway формирует `workId` и инициирует проверку, вызывая Analysis `POST /analysis` с `workId`, данными студента, задания, `fileId` и хэшем.
-4. Analysis фиксирует отправку, сравнивает хэш с ранее загруженными работами других студентов и сохраняет отчёт с флагом `plagiarism`.
-5. Gateway возвращает пользователю `workId` и `fileId`, которые используются для последующего получения результатов.
+```bash
+docker compose up --build
+```
+- Gateway: http://localhost:8080
+- Orders API + Swagger: http://localhost:8081/swagger-ui/index.html
+- Payments API + Swagger: http://localhost:8082/swagger-ui/index.html
 
-### 2. Получение отчётов по работе
-1. Пользователь запрашивает `GET /works/{workId}/reports` в Gateway.
-2. Gateway проксирует вызов в Analysis `GET /works/{workId}/reports`.
-3. Analysis возвращает список отчётов по работе (идентификатор и признак плагиата). Gateway отдаёт ответ пользователю без изменений.
+## Пример сценария
 
-### 3. Доступ к файлу работы
-1. Любой сервис или клиент может загрузить файл по `GET /files/{fileId}` в Storage.
-2. Storage читает бинарные данные по идентификатору и возвращает содержимое с типом `application/octet-stream`.
+1) Создать счёт и пополнить:
 
-## Точки интеграции и форматы сообщений
+```bash
+curl -X POST http://localhost:8082/payments/account \
+  -H 'user_id: u1'
 
-- **Gateway → Storage**: `POST /files` с multipart-полем `file`; ответ `{"fileId": "<uuid>"}`.
-- **Gateway → Analysis**: `POST /analysis` с JSON-телом `{ workId, student, task, fileId, hash }` 
-  для запуска проверки.
-- **Gateway → Analysis**: `GET /works/{workId}/reports`; ответ `{"workId": "...", "reports": [{"reportId": "...", "plagiarism": true|false}]}`.
-- **Storage → Клиент**: `GET /files/{fileId}` возвращает бинарный файл.
+curl -X POST http://localhost:8082/payments/topup \
+  -H 'user_id: u1' \
+  -H 'Content-Type: application/json' \
+  -d '{"amount": 1000}'
 
-## Хранение данных
+curl http://localhost:8082/payments/balance \
+  -H 'user_id: u1'
+```
 
-- **Storage**: сохраняет файлы в файловой системе (`storage.dir` из настроек или окружения). Идентификаторы генерируются UUID.
-- **Analysis**: держит историю отправок и отчётов в памяти процесса (`ReportsStore`). Данные живут до перезапуска сервиса.
+2) Создать заказ (асинхронно запустит оплату):
 
-## Поведение проверки на плагиат
+```bash
+curl -X POST http://localhost:8081/orders \
+  -H 'user_id: u1' \
+  -H 'Content-Type: application/json' \
+  -d '{"amount": 200, "description": "sweater with deers"}'
+```
 
-- При получении новой работы Analysis вычисляет факт плагиата, если совпадает хэши с ранее 
-  сохранённой работой **другого** студента. Один и тот же студент может загружать идентичные файлы без отметки плагиата.
-- Для каждой отправки создаётся один отчёт с уникальным `reportId` и признаком `plagiarism`.
+3) Проверить статус:
 
-## Сетевое окружение
-
-Docker Compose поднимает сервисы в общей сети `appnet` (подсеть `10.200.0.0/24`). Storage использует том `storage_data` для устойчивого хранения файлов. Gateway зависит от готовности Storage и Analysis.
+```bash
+curl http://localhost:8081/orders \
+  -H 'user_id: u1'
+```

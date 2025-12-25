@@ -1,58 +1,86 @@
 services:
-  storage:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: storage
-    ports:
-      - "8081:8081"
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
     environment:
-      - SERVER_PORT=8081
-      - STORAGE_DIR=/data
-      - SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE=50MB
-      - SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE=50MB
-    volumes:
-      - storage_data:/data
-    networks:
-      - appnet
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
 
-  analysis:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: analysis
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - zookeeper
     ports:
-      - "8082:8082"
+      - "9092:9092"
     environment:
-      - SERVER_PORT=8082
-    networks:
-      - appnet
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  orders-db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=orders
+      - POSTGRES_USER=orders
+      - POSTGRES_PASSWORD=orders
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  payments-db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=payments
+      - POSTGRES_USER=payments
+      - POSTGRES_PASSWORD=payments
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments -d payments"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   gateway:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: gateway
+      dockerfile: gateway/Dockerfile
+    depends_on:
+      - orders-service
+      - payments-service
     ports:
       - "8080:8080"
+
+  orders-service:
+    build:
+      context: .
+      dockerfile: orders-service/Dockerfile
     depends_on:
-      - storage
-      - analysis
-    environment:
-      - SERVER_PORT=8080
-      - SERVICES_STORAGEURL=http://storage:8081
-      - SERVICES_ANALYSISURL=http://analysis:8082
-      - SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE=50MB
-      - SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE=50MB
-    networks:
-      - appnet
+      orders-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "8081:8081"
 
-volumes:
-  storage_data:
-
-networks:
-  appnet:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 10.200.0.0/24
+  payments-service:
+    build:
+      context: .
+      dockerfile: payments-service/Dockerfile
+    depends_on:
+      payments-db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "8082:8082"

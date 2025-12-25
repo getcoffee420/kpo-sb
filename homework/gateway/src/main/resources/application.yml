@@ -1,0 +1,25 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway
+  cloud:
+    gateway:
+      default-filters:
+        - AddResponseHeader=X-Request-From, gateway
+      routes:
+        - id: orders
+          uri: http://orders-service:8081
+          predicates:
+            - Path=/orders/**,/swagger/orders/**,/v3/api-docs/orders
+          filters:
+            - RewritePath=/swagger/orders/(?<segment>.*), /${segment}
+            - RewritePath=/v3/api-docs/orders, /v3/api-docs
+        - id: payments
+          uri: http://payments-service:8082
+          predicates:
+            - Path=/payments/**,/swagger/payments/**,/v3/api-docs/payments
+          filters:
+            - RewritePath=/swagger/payments/(?<segment>.*), /${segment}
+            - RewritePath=/v3/api-docs/payments, /v3/api-docs

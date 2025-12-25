@@ -1,0 +1,35 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: orders-service
+  datasource:
+    url: jdbc:postgresql://orders-db:5432/orders
+    username: orders
+    password: orders
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+  kafka:
+    bootstrap-servers: kafka:9092
+    consumer:
+      group-id: orders-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
+    listener:
+      ack-mode: manual
+
+app:
+  outbox:
+    poll-interval-ms: 500
+    batch-size: 50
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
